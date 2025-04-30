@@ -60,6 +60,7 @@ addpath common
 disp ('Starting processing...');
 
 settings = initSettings_urban();
+settings.skymask_filename = 'skymask_A1_urban.csv';
 [fid, message] = fopen(settings.fileName, 'rb');
 probeData(settings);
 %Initialize the multiplier to adjust for the data type

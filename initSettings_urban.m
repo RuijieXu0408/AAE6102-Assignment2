@@ -58,7 +58,7 @@ settings.fileName           = 'C:\01_Study\AAE6102_data\Urban.dat';
 % settings.fileName           = 'C:\Users\guoha\Desktop\GNSS_SDR\GPSSDR_vt\sample data\hackrf_try_1.dat';
 % Data type used to store one sample
 settings.dataType           = 'schar';  
- 
+settings.skymask_filename = 'skymask_A1_urban.csv';
 % File Types
 %1 - 8 bit real samples S0,S1,S2,...
 %2 - 8 bit I/Q samples I0,Q0,I1,Q1,I2,Q2,...                      

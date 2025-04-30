@@ -6,7 +6,7 @@ open_gt = [22.328444770087565,114.1713630049711 0]; %% Opensky gt --RayJ
 
 geoscatter(open_gt(1),open_gt(2),"*");
 geobasemap satellite;
-
+ 
 for i=1:size(navSolutions.latitude,2)
     geoplot(navSolutions.latitude_kf(i),navSolutions.longitude_kf(i),'r*', 'MarkerSize', 10);hold on;
 end

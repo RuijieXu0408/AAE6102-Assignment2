@@ -1,4 +1,4 @@
-function [pos,el, az, dop] = leastSquarePos(satpos,obs,settings)
+function [pos,el, az, dop, raim] = leastSquarePos(satpos,obs,settings)
 %Function calculates the Least Square Solution.
 %
 %[pos, el, az, dop] = leastSquarePos(satpos, obs, settings);
@@ -31,22 +31,28 @@ function [pos,el, az, dop] = leastSquarePos(satpos,obs,settings)
 
 %=== Initialization =======================================================
 nmbOfIterations = 10;
+idx_to_isolate=NaN;
+
+nmbOfSatellites = size(satpos, 2);
 
 dtr     = pi/180;
 pos     = zeros(4, 1);   % center of earth
 X       = satpos;
-nmbOfSatellites = size(satpos, 2);
 
 A       = zeros(nmbOfSatellites, 4);
 omc     = zeros(nmbOfSatellites, 1);
-weight = ones(nmbOfSatellites, 1);
+weight  = ones(nmbOfSatellites, 1);
 az      = zeros(1, nmbOfSatellites);
 el      = az;
 
+
+
+while true
+
 %=== Iteratively find receiver position ===================================
 for iter = 1:nmbOfIterations
-
     for i = 1:nmbOfSatellites
+
         if iter == 1
             %--- Initialize variables at the first iteration --------------
             Rot_X = X(:, i);
@@ -66,6 +72,7 @@ for iter = 1:nmbOfIterations
             %--- Find the elevation angel of the satellite ----------------
             [az(i), el(i), ~] = topocent(pos(1:3, :), Rot_X - pos(1:3, :));
 
+
             if (settings.useTropCorr == 1)
                 %--- Calculate tropospheric correction --------------------
                 trop = tropo(sin(el(i) * dtr), ...
@@ -74,7 +81,16 @@ for iter = 1:nmbOfIterations
                 % Do not calculate or apply the tropospheric corrections
                 trop = 0;
             end
-            weight(i)=sin(el(i))^2;
+
+
+            blocked_sat_idx=Skymask(settings.skymask_filename,el(i),az(i),0);
+            
+            if(blocked_sat_idx)
+                weight(i)=sin(el(i))^2/2;
+            else
+                weight(i)=sin(el(i))^2;
+            end
+            
         end % if iter == 1 ... ... else 
 
         %--- Apply the corrections ----------------------------------------
@@ -86,7 +102,6 @@ for iter = 1:nmbOfIterations
                      (-(Rot_X(3) - pos(3))) / norm(Rot_X - pos(1:3), 'fro') ...
                      1 ];
         
-        % weight by hd
         
     end % for i = 1:nmbOfSatellites
 
@@ -97,13 +112,36 @@ for iter = 1:nmbOfIterations
         fprintf('Cannot get a converged solotion! \n');
         return
     end
+        
 
     %--- Find position update (in the least squares sense)-----------------
     %x   = A \ omc;
 
+
+    % exclude isolate obs
+    if(isnan(idx_to_isolate)||iter<nmbOfIterations)
+    elseif(idx_to_isolate==1)
+        nmbOfSatellites=nmbOfSatellites-1;
+        A=A(2:end,:);
+        weight=weight(2:end);
+        omc=omc(2:end);
+    elseif(idx_to_isolate==nmbOfSatellites)
+        nmbOfSatellites=nmbOfSatellites-1;
+        A=A(1:end-1,:);
+        weight=weight(1:end-1);
+        omc=omc(1:end-1);
+    else
+        nmbOfSatellites=nmbOfSatellites-1;
+        A=A([1:idx_to_isolate-1,idx_to_isolate+1:end],:);
+        weight=weight([1:idx_to_isolate-1,idx_to_isolate+1:end]);
+        omc=omc([1:idx_to_isolate-1,idx_to_isolate+1:end]);
+    end
+
     %--- Find position update (for the weighted least square)
+
     W=diag(weight);
     C=W'*W;
+
     x=(A'*C*A)\(A'*C*omc);
 
     %--- Apply position update --------------------------------------------
@@ -111,12 +149,61 @@ for iter = 1:nmbOfIterations
     
 end % for iter = 1:nmbOfIterations
 
+% Weighted RAIM (2025.04.05)
+% if allSettings.sys.raim_type == 2 % no RAIM: end the while loop
+%     break
+% end
+% Nr_sat = size(H,1);
+% [Updated_mat, Detect_results] = chi2_detector(dR', W, H, Nr_sat, allSettings);
+whether_compute_PL = false;
+whether_abort_operation = false;
+
+isolation_mat = ones(nmbOfSatellites,1);
+[Updated_mat, Detect_results] = chi2_detector(omc, W, A, nmbOfSatellites,isolation_mat); % --sbs
+
+if Detect_results.fault_confirmed == 0
+    whether_compute_PL = true;
+    % no fault detected
+    break;
+else
+    all_fault_check = 1e-6 * ones(nmbOfSatellites,1);
+    for sv_idx = 1: nmbOfSatellites
+        isolation_mat = ones(nmbOfSatellites,1);
+        isolation_mat(sv_idx) = 0;  % check idx^th sv
+        [~, Detect_test] = chi2_detector(omc, W, A, nmbOfSatellites,isolation_mat);
+        all_fault_check(sv_idx) = Detect_test.fault_confirmed ;
+    end
+    if sum(all_fault_check) == nmbOfSatellites-1 % having one and only one fault detected [1,1,1,0,1,1]
+        idx_to_isolate = find(all_fault_check==0);
+        whether_compute_PL = true;
+        % step to the WLS a second time without isolated satellite
+        continue;
+    else
+        % detected more than one faulty measurements, cannot used for positioning
+        whether_abort_operation = true;
+        break
+    end
+end
+
+
+end
+
+
+% 
+% if allSettings.sys.raim_type ~= 2 % having RAIM
+    if whether_compute_PL
+        PL = compute_PL(Updated_mat, Detect_results);
+    else
+        PL = NaN;
+    end
+    raim = [Detect_results.WSSE_sqrt, Detect_results.Thres, PL, whether_abort_operation];
+% end
 
 %--- Fixing resulut -------------------------------------------------------
 pos = pos';
 
 %=== Calculate Dilution Of Precision ======================================
-if nargout  == 4
+% if nargout  == 4
     %--- Initialize output ------------------------------------------------
     dop     = zeros(1, 5);
     
@@ -128,4 +215,4 @@ if nargout  == 4
     dop(3)  = sqrt(Q(1,1) + Q(2,2));                % HDOP
     dop(4)  = sqrt(Q(3,3));                         % VDOP
     dop(5)  = sqrt(Q(4,4));                         % TDOP
-end  % if nargout  == 4
+% end  % if nargout  == 4
